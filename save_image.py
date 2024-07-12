@@ -5,6 +5,9 @@ import numpy
 import os
 from PIL import Image, ExifTags
 from PIL.PngImagePlugin import PngInfo
+import uuid
+from io import BytesIO
+import time
 
 class SaveImagePlus:
     def __init__(self):
@@ -24,14 +27,18 @@ class SaveImagePlus:
         return {
             "required": {
                 "images": ("IMAGE", ),
-                "filename_prefix": ("STRING", {"default": "ComfyUI"}),
-                "file_type": ([s.FILE_TYPE_PNG, s.FILE_TYPE_JPEG, s.FILE_TYPE_WEBP_LOSSLESS, s.FILE_TYPE_WEBP_LOSSY], ),
+                "filename_prefix": ("STRING", {"default": "%uuid%"}),
+                "file_type": ([s.FILE_TYPE_JPEG, s.FILE_TYPE_PNG, s.FILE_TYPE_WEBP_LOSSLESS, s.FILE_TYPE_WEBP_LOSSY], ),
                 "remove_metadata": ("BOOLEAN", {"default": False}),
+                "quality": ("INT", {"default": 80, "min": 1, "max": 100}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
 
-    def save_images(self, images, filename_prefix="ComfyUI", file_type=FILE_TYPE_PNG, remove_metadata=False, prompt=None, extra_pnginfo=None):
+    def save_images(self, images, filename_prefix="%uuid%", file_type=FILE_TYPE_JPEG, remove_metadata=False, quality=80, prompt=None, extra_pnginfo=None):
+        if filename_prefix == "%uuid%":
+            filename_prefix = str(uuid.uuid4()).replace('-', '')
+
         output_dir = folder_paths.get_output_directory()
         full_output_folder, filename, counter, subfolder, _ = folder_paths.get_save_image_path(filename_prefix, output_dir, images[0].shape[1], images[0].shape[0])
         extension = {
@@ -39,7 +46,7 @@ class SaveImagePlus:
             self.FILE_TYPE_JPEG: "jpg",
             self.FILE_TYPE_WEBP_LOSSLESS: "webp",
             self.FILE_TYPE_WEBP_LOSSY: "webp",
-        }.get(file_type, "png")
+        }.get(file_type, "jpg")
 
         results = []
         for image in images:
@@ -61,7 +68,7 @@ class SaveImagePlus:
                 if file_type == self.FILE_TYPE_WEBP_LOSSLESS:
                     kwargs["lossless"] = True
                 else:
-                    kwargs["quality"] = 90
+                    kwargs["quality"] = quality
                 if not remove_metadata and not args.disable_metadata:
                     metadata = {}
                     if prompt is not None:
@@ -72,8 +79,19 @@ class SaveImagePlus:
                     exif[ExifTags.Base.UserComment] = json.dumps(metadata)
                     kwargs["exif"] = exif.tobytes()
 
-            file = f"{filename}_{counter:05}_.{extension}"
-            img.save(os.path.join(full_output_folder, file), **kwargs)
+            timestamp = int(time.time() * 1000)
+            file = f"{filename}_{timestamp}_{counter:03}.{extension}"
+            
+            if extension == "jpg":
+                buffer = BytesIO()
+                # optimize: Enables additional optimization to reduce file size
+                # progressive: Saves the image in a progressive format, allowing partial loading in web browsers
+                img.save(buffer, format="JPEG", quality=quality, optimize=True, progressive=True)
+                with open(os.path.join(full_output_folder, file), "wb") as f:
+                    f.write(buffer.getvalue())
+            else:
+                img.save(os.path.join(full_output_folder, file), **kwargs)
+            
             results.append({
                 "filename": file,
                 "subfolder": subfolder,
